@@ -22,7 +22,7 @@
   <!-- Axios (requisições HTTP) -->
   <script src="https://unpkg.com/axios@1.6.2/dist/axios.min.js"></script>
   <!-- Supabase JS Client -->
-  <script src="https://unpkg.com/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <!-- dnd-kit (drag & drop) -->
   <script src="https://unpkg.com/@dnd-kit/core@6.0.8/dist/index.umd.js"></script>
   <script src="https://unpkg.com/@dnd-kit/utilities@3.2.1/dist/index.umd.js"></script>
@@ -41,7 +41,8 @@
     - O arquivo app.js deve conter a Parte 1 + Parte 2 (nessa ordem).
     - O Babel vai transpilar o código JSX.
   -->
-  <script type="text/babel" src="app.js"></script>
+ <!-- Garanta que o app.js só rode DEPOIS de todos os scripts estarem totalmente carregados -->
+<script type="text/babel" src="app.js" defer></script>
 
   <!-- 
     Caso queira usar o JS inline (tudo no HTML), descomente o bloco abaixo e remova o src="app.js".
