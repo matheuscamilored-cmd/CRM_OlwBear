@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CRM Kanban com Supabase</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide-react@0.263.1/dist/umd/lucide-react.min.js"></script>
+  <script src="https://unpkg.com/framer-motion@10.16.4/dist/framer-motion.js"></script>
+  <script src="https://unpkg.com/@dnd-kit/core@6.0.8/dist/index.umd.js"></script>
+  <script src="https://unpkg.com/@dnd-kit/utilities@3.2.1/dist/index.umd.js"></script>
+  <script src="https://unpkg.com/axios@1.6.2/dist/axios.min.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    // =========================================================
+    // CONFIGURAÇÃO SUPABASE (substitua pelos seus valores)
+    // =========================================================
+    const SUPABASE_URL = "https://seu-projeto.supabase.co";
+    const SUPABASE_ANON_KEY = "sua-chave-anon-aqui";
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // =========================================================
+    // IMPORTAÇÕES
+    // =========================================================
+    const { useState, useEffect, useContext, createContext } = React;
+    const { motion, AnimatePresence } = window.FramerMotion;
+    const { DndContext, closestCorners, useDraggable, useDroppable } = window.DndKit;
+    const { CSS } = window.DndKitUtilities;
+    const {
+      User, Phone, Mail, Building2, MapPin, Tag,
+      X, Save, Trash2, Send, PlusCircle,
+    } = window.LucideReact;
+
+    // =========================================================
+    // CONTEXTO
+    // =========================================================
+    const STAGES = ["Contato", "Apresentação", "Negociação", "Fechamento", "Ganho/Perdido"];
+    const LeadContext = createContext();
+
+    const LeadProvider = ({ children }) => {
+      const [leads, setLeads] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      const loadLeads = async () => {
+        setLoading(true);
+        const { data, error } = await supabase
+          .from('leads')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (error) console.error(error);
+        else setLeads(data || []);
+        setLoading(false);
+      };
+
+      useEffect(() => { loadLeads(); }, []);
+
+      const addLead = async (lead) => {
+        const newLead = { ...lead, stage: "Contato" };
+        const { data, error } = await supabase
+          .from('leads')
+          .insert([newLead])
+          .select();
+        if (error) console.error(error);
+        else if (data) setLeads(prev => [data[0], ...prev]);
+      };
+
+      const updateLead = async (id, updated) => {
+        const { data, error } = await supabase
+          .from('leads')
+          .update(updated)
+          .eq('id', id)
+          .select();
+        if (error) console.error(error);
+        else if (data) setLeads(prev => prev.map(l => l.id === id ? data[0] : l));
+      };
+
+      const deleteLead = async (id) => {
+        const { error } = await supabase
+          .from('leads')
+          .delete()
+          .eq('id', id);
+        if (error) console.error(error);
+        else setLeads(prev => prev.filter(l => l.id !== id));
+      };
+
+      const moveLead = async (id, stage) => {
+        const { data, error } = await supabase
+          .from('leads')
+          .update({ stage })
+          .eq('id', id)
+          .select();
+        if (error) console.error(error);
+        else if (data) setLeads(prev => prev.map(l => l.id === id ? data[0] : l));
+      };
+
+      const getLeadsByStage = (stage) => leads.filter(l => l.stage === stage);
+
+      return (
+        <LeadContext.Provider value={{
+          leads, STAGES, loading,
+          addLead, updateLead, deleteLead, moveLead, getLeadsByStage
+        }}>
+          {children}
+        </LeadContext.Provider>
+      );
+    };
+
+    const useLead = () => useContext(LeadContext);
+
+    // =========================================================
+    // SERVIÇOS
+    // =========================================================
+    const fetchCnpj = async (cnpj) => {
+      const resp = await axios.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
+      return resp.data;
+    };
+    const fetchCep = async (cep) => {
+      const resp = await axios.get(`https://viacep.com.br/ws/${cep}/json/`);
+      return resp.data;
+    };
+
+    // =========================================================
+    // COMPONENTES
+    // =========================================================
+    // LeadForm (igual ao anterior)
+    const LeadForm = ({ formData, setFormData }) => {
+      const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+      };
+      const handleCnpjBlur = async () => {
+        const cnpj = formData.cnpj?.replace(/\D/g, "");
+        if (cnpj && cnpj.length === 14) {
+          try {
+            const data = await fetchCnpj(cnpj);
+            setFormData(prev => ({
+              ...prev,
+              razaoSocial: data.razao_social || "",
+              endereco: `${data.logradouro || ""}, ${data.numero || ""}, ${data.bairro || ""}, ${data.municipio || ""} - ${data.uf || ""}`,
+            }));
+          } catch (e) { console.error(e); }
+        }
+      };
+      const handleCepBlur = async () => {
+        const cep = formData.cep?.replace(/\D/g, "");
+        if (cep && cep.length === 8) {
+          try {
+            const data = await fetchCep(cep);
+            setFormData(prev => ({
+              ...prev,
+              endereco: `${data.logradouro || ""}, ${data.bairro || ""}, ${data.localidade || ""} - ${data.uf || ""}`,
+            }));
+          } catch (e) { console.error(e); }
+        }
+      };
+      return (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-700">Nome do Contato *</label>
+            <div className="relative">
+              <User className="absolute left-3 top-2.5 text-gray-400" size={18} />
+              <input type="text" name="nome" value={formData.nome || ""} onChange={handleChange} required className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">CPF ou CNPJ</label>
+            <div className="relative">
+              <Building2 className="absolute left-3 top-2.5 text-gray-400" size={18} />
+              <input type="text" name="cnpj" value={formData.cnpj || ""} onChange={handleChange} onBlur={handleCnpjBlur} placeholder="Somente números" className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Razão Social</label>
+            <input type="text" name="razaoSocial" value={formData.razaoSocial || ""} onChange={handleChange} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none" />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-700">Endereço</label>
+            <div className="relative">
+              <MapPin className="absolute left-3 top-2.5 text-gray-400" size={18} />
+              <input type="text" name="endereco" value={formData.endereco || ""} onChange={handleChange} className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none" />
+            </div>
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-700">CEP (opcional)</label>
+            <input type="text" name="cep" value={formData.cep || ""} onChange={handleChange} onBlur={handleCepBlur} placeholder="Somente números" className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Telefone/WhatsApp *</label>
+            <div className="relative">
+              <Phone className="absolute left-3 top-2.5 text-gray-400" size={18} />
+              <input type="text" name="telefone" value={formData.telefone || ""} onChange={handleChange} required className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Email</label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-2.5 text-gray-400" size={18} />
+              <input type="email" name="email" value={formData.email || ""} onChange={handleChange} className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none" />
+            </div>
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-700">Interesses</label>
+            <div className="relative">
+              <Tag className="absolute left-3 top-2.5 text-gray-400" size={18} />
+              <input type="text" name="interesses" value={formData.interesses || ""} onChange={handleChange} placeholder="Ex: Consultoria, Vendas, Marketing" className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none" />
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // LeadModal
+    const LeadModal = ({ lead, isOpen, onClose }) => {
+      const { updateLead, deleteLead } = useLead();
+      const [formData, setFormData] = useState(lead);
+      useEffect(() => { setFormData(lead); }, [lead]);
+      const handleSave = () => { updateLead(lead.id, formData); onClose(); };
+      const handleDelete = () => { if (window.confirm("Tem certeza?")) { deleteLead(lead.id); onClose(); } };
+      return (
+        <AnimatePresence>
+          {isOpen && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
+              <motion.div initial={{ scale: 0.9, y: 30 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 30 }} className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-2xl font-bold text-gray-800">Editar Lead</h2>
+                  <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
+                </div>
+                <LeadForm formData={formData} setFormData={setFormData} />
+                <div className="flex justify-end gap-3 mt-6">
+                  <button onClick={handleDelete} className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"><Trash2 size={18} /> Excluir</button>
+                  <button onClick={handleSave} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"><Save size={18} /> Salvar</button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      );
+    };
+
+    // KanbanCard
+    const KanbanCard = ({ lead }) => {
+      const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: lead.id });
+      const [isModalOpen, setIsModalOpen] = useState(false);
+      const style = { transform: CSS.Translate.toString(transform), opacity: isDragging ? 0.5 : 1 };
+      return (
+        <>
+          <div ref={setNodeRef} style={style} {...listeners} {...attributes} onClick={() => setIsModalOpen(true)} className="bg-white p-4 rounded-lg shadow-md hover:shadow-lg cursor-pointer transition-all border-l-4 border-indigo-400">
+            <div className="flex items-center gap-2 font-semibold text-gray-800"><User size={16} className="text-indigo-500" />{lead.nome}</div>
+            <div className="text-sm text-gray-600 mt-1 flex items-center gap-1"><Phone size={14} /> {lead.telefone}</div>
+            {lead.email && <div className="text-sm text-gray-600 flex items-center gap-1"><Mail size={14} /> {lead.email}</div>}
+            {lead.interesses && <div className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full inline-block mt-2">{lead.interesses}</div>}
+          </div>
+          <LeadModal lead={lead} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+        </>
+      );
+    };
+
+    // KanbanColumn
+    const KanbanColumn = ({ stage }) => {
+      const { getLeadsByStage } = useLead();
+      const leads = getLeadsByStage(stage);
+      const { setNodeRef } = useDroppable({ id: stage });
+      const colors = {
+        Contato: "bg-blue-50 border-blue-300",
+        Apresentação: "bg-purple-50 border-purple-300",
+        Negociação: "bg-yellow-50 border-yellow-300",
+        Fechamento: "bg-green-50 border-green-300",
+        "Ganho/Perdido": "bg-red-50 border-red-300",
+      };
+      return (
+        <div ref={setNodeRef} className={`min-w-[280px] flex-1 p-3 rounded-lg border-2 ${colors[stage]}`}>
+          <h2 className="font-bold text-lg mb-3 flex items-center gap-2">{stage}<span className="text-sm bg-white/70 px-2 py-0.5 rounded-full">{leads.length}</span></h2>
+          <div className="space-y-3">
+            {leads.map(lead => (
+              <motion.div key={lead.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9 }} transition={{ duration: 0.2 }}>
+                <KanbanCard lead={lead} />
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      );
+    };
+
+    // KanbanBoard
+    const KanbanBoard = () => {
+      const { STAGES, moveLead } = useLead();
+      const handleDragEnd = (event) => {
+        const { active, over } = event;
+        if (!over) return;
+        moveLead(active.id, over.id);
+      };
+      return (
+        <DndContext collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
+          <div className="flex gap-4 overflow-x-auto p-4 min-h-screen">
+            {STAGES.map(stage => <KanbanColumn key={stage} stage={stage} />)}
+          </div>
+        </DndContext>
+      );
+    };
+
+    // =========================================================
+    // PÁGINAS
+    // =========================================================
+    const HomePage = ({ setPage }) => {
+      const { addLead } = useLead();
+      const [formData, setFormData] = useState({});
+      const [success, setSuccess] = useState(false);
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!formData.nome || !formData.telefone) { alert("Nome e Telefone são obrigatórios"); return; }
+        addLead(formData);
+        setSuccess(true);
+        setFormData({});
+        setTimeout(() => setSuccess(false), 4000);
+      };
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-purple-100 to-pink-100 flex items-center justify-center p-4">
+          <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full p-8">
+            <h1 className="text-4xl font-bold text-center text-gray-800 mb-2">🚀 Fale Conosco</h1>
+            <p className="text-center text-gray-500 mb-6">Preencha o formulário e nossa equipe entrará em contato</p>
+            <form onSubmit={handleSubmit}>
+              <LeadForm formData={formData} setFormData={setFormData} />
+              <button type="submit" className="mt-6 w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition shadow-lg"><Send size={20} /> Enviar</button>
+            </form>
+            {success && <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mt-4 p-3 bg-green-100 text-green-700 rounded-lg text-center">Lead cadastrado com sucesso!</motion.div>}
+            <div className="mt-6 text-center text-sm text-gray-400">
+              <button onClick={() => setPage("admin")} className="text-indigo-500 hover:underline">Acessar painel administrativo</button>
+            </div>
+          </motion.div>
+        </div>
+      );
+    };
+
+    const AdminPage = ({ setPage }) => {
+      const { loading } = useLead();
+      return (
+        <div className="min-h-screen bg-gray-100 p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-3xl font-bold text-gray-800">📋 CRM Kanban</h1>
+            <button onClick={() => setPage("home")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg shadow transition"><PlusCircle size={20} /> Novo Lead</button>
+          </div>
+          {loading ? (
+            <div className="flex justify-center items-center h-64">
+              <div className="text-gray-500 text-xl">Carregando leads...</div>
+            </div>
+          ) : (
+            <KanbanBoard />
+          )}
+        </div>
+      );
+    };
+
+    // =========================================================
+    // APP
+    // =========================================================
+    const App = () => {
+      const [page, setPage] = useState("home");
+      return (
+        <LeadProvider>
+          {page === "home" && <HomePage setPage={setPage} />}
+          {page === "admin" && <AdminPage setPage={setPage} />}
+        </LeadProvider>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
