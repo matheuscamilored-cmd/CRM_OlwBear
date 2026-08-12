@@ -1,0 +1,546 @@
+// =============================================================
+// BLOCO DE CAPTURA DE ERROS GLOBAL
+// =============================================================
+try {
+  console.log('🚀 Iniciando app.js...');
+
+  // =============================================================
+  // PARTE 1 – Configuração, Contexto, Serviços e Formulários
+  // =============================================================
+
+  // 1. CONFIGURAÇÃO SUPABASE
+  const SUPABASE_URL = "https://eptoctypwicdwlwsddde.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVwdG9jdHlwd2ljZHdsd3NkZGRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1NDIxMDgsImV4cCI6MjEwMjExODEwOH0.c3VcabnMhBNkaJjnJw8O7VvvGA5vqRzXTdZu-110Mdw";
+
+  // Verifica se o Supabase foi carregado
+  console.log('🔍 Verificando Supabase...');
+  if (typeof window.supabase === 'undefined') {
+    document.getElementById('root').innerHTML = `
+      <p class="text-red-500 text-center p-4">
+        Erro: Supabase não carregou. Verifique sua conexão com a internet.
+      </p>
+    `;
+    throw new Error('Cliente Supabase não encontrado.');
+  }
+  console.log('✅ Supabase disponível.');
+
+  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  // 2. IMPORTAÇÕES (via variáveis globais)
+  console.log('🔍 Verificando bibliotecas...');
+  if (typeof React === 'undefined') throw new Error('React não carregado.');
+  if (typeof ReactDOM === 'undefined') throw new Error('ReactDOM não carregado.');
+  if (typeof window.DndKit === 'undefined') throw new Error('DndKit não carregado.');
+  if (typeof window.LucideReact === 'undefined') throw new Error('LucideReact não carregado.');
+  console.log('✅ Bibliotecas carregadas.');
+
+  const { useState, useEffect, useContext, createContext } = React;
+  const { DndContext, closestCorners, useDraggable, useDroppable } = window.DndKit;
+  const { CSS } = window.DndKitUtilities;
+  const {
+    User, Phone, Mail, Building2, MapPin, Tag,
+    X, Save, Trash2, Send, PlusCircle,
+  } = window.LucideReact;
+
+  // 3. CONTEXTO DOS LEADS
+  const STAGES = ["Contato", "Apresentação", "Negociação", "Fechamento", "Ganho/Perdido"];
+  const LeadContext = createContext();
+
+  const LeadProvider = ({ children }) => {
+    const [leads, setLeads] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    const loadLeads = async () => {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('leads')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) {
+        console.error('Erro ao carregar leads:', error);
+        alert('Erro ao carregar leads. Verifique o console.');
+      } else {
+        setLeads(data || []);
+      }
+      setLoading(false);
+    };
+
+    useEffect(() => {
+      loadLeads();
+    }, []);
+
+    const addLead = async (lead) => {
+      const newLead = { ...lead, stage: 'Contato' };
+      const { data, error } = await supabase
+        .from('leads')
+        .insert([newLead])
+        .select();
+      if (error) {
+        console.error('Erro ao adicionar lead:', error);
+        alert('Erro ao adicionar lead.');
+      } else if (data && data.length > 0) {
+        setLeads(prev => [data[0], ...prev]);
+      }
+    };
+
+    const updateLead = async (id, updated) => {
+      const { data, error } = await supabase
+        .from('leads')
+        .update(updated)
+        .eq('id', id)
+        .select();
+      if (error) {
+        console.error('Erro ao atualizar lead:', error);
+        alert('Erro ao atualizar lead.');
+      } else if (data && data.length > 0) {
+        setLeads(prev => prev.map(l => l.id === id ? data[0] : l));
+      }
+    };
+
+    const deleteLead = async (id) => {
+      const { error } = await supabase
+        .from('leads')
+        .delete()
+        .eq('id', id);
+      if (error) {
+        console.error('Erro ao excluir lead:', error);
+        alert('Erro ao excluir lead.');
+      } else {
+        setLeads(prev => prev.filter(l => l.id !== id));
+      }
+    };
+
+    const moveLead = async (id, stage) => {
+      const { data, error } = await supabase
+        .from('leads')
+        .update({ stage })
+        .eq('id', id)
+        .select();
+      if (error) {
+        console.error('Erro ao mover lead:', error);
+        alert('Erro ao mover lead.');
+      } else if (data && data.length > 0) {
+        setLeads(prev => prev.map(l => l.id === id ? data[0] : l));
+      }
+    };
+
+    const getLeadsByStage = (stage) => leads.filter(l => l.stage === stage);
+
+    return (
+      <LeadContext.Provider value={{
+        leads,
+        STAGES,
+        loading,
+        addLead,
+        updateLead,
+        deleteLead,
+        moveLead,
+        getLeadsByStage,
+      }}>
+        {children}
+      </LeadContext.Provider>
+    );
+  };
+
+  const useLead = () => useContext(LeadContext);
+
+  // 4. SERVIÇOS (CNPJ e CEP)
+  const fetchCnpj = async (cnpj) => {
+    const resp = await axios.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
+    return resp.data;
+  };
+  const fetchCep = async (cep) => {
+    const resp = await axios.get(`https://viacep.com.br/ws/${cep}/json/`);
+    return resp.data;
+  };
+
+  // 5. COMPONENTE LeadForm
+  const LeadForm = ({ formData, setFormData }) => {
+    const handleChange = (e) => {
+      const { name, value } = e.target;
+      setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleCnpjBlur = async () => {
+      const cnpj = formData.cnpj?.replace(/\D/g, '');
+      if (cnpj && cnpj.length === 14) {
+        try {
+          const data = await fetchCnpj(cnpj);
+          setFormData(prev => ({
+            ...prev,
+            razaoSocial: data.razao_social || '',
+            endereco: `${data.logradouro || ''}, ${data.numero || ''}, ${data.bairro || ''}, ${data.municipio || ''} - ${data.uf || ''}`,
+          }));
+        } catch (e) { console.error(e); }
+      }
+    };
+
+    const handleCepBlur = async () => {
+      const cep = formData.cep?.replace(/\D/g, '');
+      if (cep && cep.length === 8) {
+        try {
+          const data = await fetchCep(cep);
+          setFormData(prev => ({
+            ...prev,
+            endereco: `${data.logradouro || ''}, ${data.bairro || ''}, ${data.localidade || ''} - ${data.uf || ''}`,
+          }));
+        } catch (e) { console.error(e); }
+      }
+    };
+
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="col-span-2">
+          <label className="block text-sm font-medium text-gray-700">Nome do Contato *</label>
+          <div className="relative">
+            <User className="absolute left-3 top-2.5 text-gray-400" size={18} />
+            <input
+              type="text" name="nome" value={formData.nome || ''} onChange={handleChange}
+              required
+              className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700">CPF ou CNPJ</label>
+          <div className="relative">
+            <Building2 className="absolute left-3 top-2.5 text-gray-400" size={18} />
+            <input
+              type="text" name="cnpj" value={formData.cnpj || ''} onChange={handleChange}
+              onBlur={handleCnpjBlur} placeholder="Somente números"
+              className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700">Razão Social</label>
+          <input
+            type="text" name="razaoSocial" value={formData.razaoSocial || ''} onChange={handleChange}
+            className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none"
+          />
+        </div>
+
+        <div className="col-span-2">
+          <label className="block text-sm font-medium text-gray-700">Endereço</label>
+          <div className="relative">
+            <MapPin className="absolute left-3 top-2.5 text-gray-400" size={18} />
+            <input
+              type="text" name="endereco" value={formData.endereco || ''} onChange={handleChange}
+              className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="col-span-2">
+          <label className="block text-sm font-medium text-gray-700">CEP (opcional)</label>
+          <input
+            type="text" name="cep" value={formData.cep || ''} onChange={handleChange}
+            onBlur={handleCepBlur} placeholder="Somente números"
+            className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700">Telefone/WhatsApp *</label>
+          <div className="relative">
+            <Phone className="absolute left-3 top-2.5 text-gray-400" size={18} />
+            <input
+              type="text" name="telefone" value={formData.telefone || ''} onChange={handleChange}
+              required
+              className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700">Email</label>
+          <div className="relative">
+            <Mail className="absolute left-3 top-2.5 text-gray-400" size={18} />
+            <input
+              type="email" name="email" value={formData.email || ''} onChange={handleChange}
+              className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="col-span-2">
+          <label className="block text-sm font-medium text-gray-700">Interesses</label>
+          <div className="relative">
+            <Tag className="absolute left-3 top-2.5 text-gray-400" size={18} />
+            <input
+              type="text" name="interesses" value={formData.interesses || ''} onChange={handleChange}
+              placeholder="Ex: Consultoria, Vendas, Marketing"
+              className="pl-10 w-full border rounded-lg p-2 focus:ring-2 focus:ring-indigo-400 outline-none"
+            />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 6. COMPONENTE LeadModal
+  const LeadModal = ({ lead, isOpen, onClose }) => {
+    const { updateLead, deleteLead } = useLead();
+    const [formData, setFormData] = useState(lead);
+
+    useEffect(() => {
+      setFormData(lead);
+    }, [lead]);
+
+    const handleSave = () => {
+      updateLead(lead.id, formData);
+      onClose();
+    };
+
+    const handleDelete = () => {
+      if (window.confirm('Tem certeza que deseja excluir este lead?')) {
+        deleteLead(lead.id);
+        onClose();
+      }
+    };
+
+    if (!isOpen) return null;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
+        <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-2xl font-bold text-gray-800">Editar Lead</h2>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+              <X size={24} />
+            </button>
+          </div>
+          <LeadForm formData={formData} setFormData={setFormData} />
+          <div className="flex justify-end gap-3 mt-6">
+            <button
+              onClick={handleDelete}
+              className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
+            >
+              <Trash2 size={18} /> Excluir
+            </button>
+            <button
+              onClick={handleSave}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+            >
+              <Save size={18} /> Salvar
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // =============================================================
+  // PARTE 2 – Componentes Kanban, Páginas e Renderização
+  // =============================================================
+
+  // 7. COMPONENTE KanbanCard
+  const KanbanCard = ({ lead }) => {
+    const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: lead.id });
+    const [isModalOpen, setIsModalOpen] = useState(false);
+
+    const style = {
+      transform: CSS.Translate.toString(transform),
+      opacity: isDragging ? 0.5 : 1,
+      transition: 'opacity 0.2s, transform 0.2s',
+    };
+
+    return (
+      <>
+        <div
+          ref={setNodeRef}
+          style={style}
+          {...listeners}
+          {...attributes}
+          onClick={() => setIsModalOpen(true)}
+          className="bg-white p-4 rounded-lg shadow-md hover:shadow-lg cursor-pointer transition-all border-l-4 border-indigo-400"
+        >
+          <div className="flex items-center gap-2 font-semibold text-gray-800">
+            <User size={16} className="text-indigo-500" />
+            {lead.nome}
+          </div>
+          <div className="text-sm text-gray-600 mt-1 flex items-center gap-1">
+            <Phone size={14} /> {lead.telefone}
+          </div>
+          {lead.email && (
+            <div className="text-sm text-gray-600 flex items-center gap-1">
+              <Mail size={14} /> {lead.email}
+            </div>
+          )}
+          {lead.interesses && (
+            <div className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full inline-block mt-2">
+              {lead.interesses}
+            </div>
+          )}
+        </div>
+        <LeadModal lead={lead} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+      </>
+    );
+  };
+
+  // 8. COMPONENTE KanbanColumn
+  const KanbanColumn = ({ stage }) => {
+    const { getLeadsByStage } = useLead();
+    const leads = getLeadsByStage(stage);
+    const { setNodeRef } = useDroppable({ id: stage });
+
+    const colors = {
+      Contato: 'bg-blue-50 border-blue-300',
+      Apresentação: 'bg-purple-50 border-purple-300',
+      Negociação: 'bg-yellow-50 border-yellow-300',
+      Fechamento: 'bg-green-50 border-green-300',
+      'Ganho/Perdido': 'bg-red-50 border-red-300',
+    };
+
+    return (
+      <div ref={setNodeRef} className={`min-w-[280px] flex-1 p-3 rounded-lg border-2 ${colors[stage]}`}>
+        <h2 className="font-bold text-lg mb-3 flex items-center gap-2">
+          {stage}
+          <span className="text-sm bg-white/70 px-2 py-0.5 rounded-full">{leads.length}</span>
+        </h2>
+        <div className="space-y-3">
+          {leads.map(lead => (
+            <div key={lead.id} className="transition-all duration-200 hover:scale-[1.02]">
+              <KanbanCard lead={lead} />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // 9. COMPONENTE KanbanBoard
+  const KanbanBoard = () => {
+    const { STAGES, moveLead } = useLead();
+
+    const handleDragEnd = (event) => {
+      const { active, over } = event;
+      if (!over) return;
+      moveLead(active.id, over.id);
+    };
+
+    return (
+      <DndContext collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
+        <div className="flex gap-4 overflow-x-auto p-4 min-h-screen">
+          {STAGES.map(stage => (
+            <KanbanColumn key={stage} stage={stage} />
+          ))}
+        </div>
+      </DndContext>
+    );
+  };
+
+  // 10. PÁGINA HOME
+  const HomePage = ({ setPage }) => {
+    const { addLead } = useLead();
+    const [formData, setFormData] = useState({});
+    const [success, setSuccess] = useState(false);
+
+    const handleSubmit = (e) => {
+      e.preventDefault();
+      if (!formData.nome || !formData.telefone) {
+        alert('Nome e Telefone são obrigatórios');
+        return;
+      }
+      addLead(formData);
+      setSuccess(true);
+      setFormData({});
+      setTimeout(() => setSuccess(false), 4000);
+    };
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-purple-100 to-pink-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full p-8">
+          <h1 className="text-4xl font-bold text-center text-gray-800 mb-2">🚀 Fale Conosco</h1>
+          <p className="text-center text-gray-500 mb-6">Preencha o formulário e nossa equipe entrará em contato</p>
+          <form onSubmit={handleSubmit}>
+            <LeadForm formData={formData} setFormData={setFormData} />
+            <button
+              type="submit"
+              className="mt-6 w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition shadow-lg"
+            >
+              <Send size={20} /> Enviar
+            </button>
+          </form>
+          {success && (
+            <div className="mt-4 p-3 bg-green-100 text-green-700 rounded-lg text-center">
+              Lead cadastrado com sucesso!
+            </div>
+          )}
+          <div className="mt-6 text-center text-sm text-gray-400">
+            <button onClick={() => setPage('admin')} className="text-indigo-500 hover:underline">
+              Acessar painel administrativo
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 11. PÁGINA ADMIN
+  const AdminPage = ({ setPage }) => {
+    const { loading } = useLead();
+
+    return (
+      <div className="min-h-screen bg-gray-100 p-6">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-bold text-gray-800">📋 CRM Kanban</h1>
+          <button
+            onClick={() => setPage('home')}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg shadow transition"
+          >
+            <PlusCircle size={20} /> Novo Lead
+          </button>
+        </div>
+        {loading ? (
+          <div className="flex justify-center items-center h-64">
+            <div className="text-gray-500 text-xl">Carregando leads...</div>
+          </div>
+        ) : (
+          <KanbanBoard />
+        )}
+      </div>
+    );
+  };
+
+  // 12. COMPONENTE PRINCIPAL APP
+  const App = () => {
+    const [page, setPage] = useState('home');
+
+    return (
+      <LeadProvider>
+        {page === 'home' && <HomePage setPage={setPage} />}
+        {page === 'admin' && <AdminPage setPage={setPage} />}
+      </LeadProvider>
+    );
+  };
+
+  // 13. RENDERIZAÇÃO
+  console.log('📦 Renderizando o App...');
+  const rootElement = document.getElementById('root');
+  if (rootElement) {
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(<App />);
+    console.log('✅ App renderizado com sucesso!');
+  } else {
+    console.error('❌ Elemento #root não encontrado!');
+    document.getElementById('root').innerHTML = `
+      <p class="text-red-500 text-center p-4">Erro: Elemento #root não encontrado.</p>
+    `;
+  }
+
+} catch (error) {
+  console.error('❌ ERRO FATAL:', error);
+  document.getElementById('root').innerHTML = `
+    <div class="flex items-center justify-center h-screen bg-red-50 p-4">
+      <div class="bg-white p-6 rounded-xl shadow-lg max-w-2xl w-full">
+        <h2 class="text-2xl font-bold text-red-600 mb-4">Erro no carregamento</h2>
+        <p class="text-gray-700 mb-2">Ocorreu um erro ao iniciar o aplicativo.</p>
+        <pre class="bg-gray-100 p-3 rounded text-sm overflow-auto">${error.message}</pre>
+        <p class="text-gray-500 text-sm mt-4">Verifique o console para mais detalhes.</p>
+      </div>
+    </div>
+  `;
+}
